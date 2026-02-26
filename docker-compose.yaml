@@ -1,0 +1,17 @@
+version: '3.9'
+
+services:
+  chat-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chat-frontend:latest
+    container_name: chat-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_CHAT_URL: ${API_CHAT_URL}
+      NEXT_PUBLIC_CHAT_SOCKET_URL: ${NEXT_PUBLIC_CHAT_SOCKET_URL}
+    ports:
+      - '3002:3000'
