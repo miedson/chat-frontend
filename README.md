@@ -30,12 +30,13 @@ App: `http://localhost:3002`.
 ## Fluxo implementado
 
 - Tela de login moderna em `/login`
-- Tela principal de atendimento em `/atendimento` e chat em `/conversa/:conversationId`
+- Tela principal do board em `/board` e chat em `/conversa/:conversationId`
 - Configuração de canais em `/settings/channels`
+- Callback OAuth Instagram em `/integracoes/instagram/callback`
 - Proxy de autenticacao em `/api/auth/login`
 - Proxy de conversas em `/api/conversations`
 - Proxy de mensagens em `/api/conversations/:conversationId/messages`
-- Proxy de canais em `/api/channels`, `/api/channels/whatsapp/connect` e `/api/channels/:connectionId/webhook/sync`
+- Proxy de canais em `/api/channels`, `/api/channels/whatsapp/connect`, `/api/channels/instagram/connect`, `/api/channels/instagram/oauth/*` e `/api/channels/:connectionId/webhook/sync`
 - Integracao real-time via Socket.IO
 
 ## Deploy com Docker Compose (Coolify)
