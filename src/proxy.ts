@@ -3,6 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 const loginUrl = "/login";
 
+function normalizeBaseUrl(url: string) {
+	return url.endsWith("/") ? url.slice(0, -1) : url;
+}
+
 export async function proxy(request: NextRequest) {
 	const cookies = request.headers.get("cookie");
 	const hasAccessToken = cookies?.includes("access_token=");
@@ -15,15 +19,24 @@ export async function proxy(request: NextRequest) {
 			.split(";")
 			.find((cookie) => cookie.trim().startsWith("refresh_token="))
 			?.split("=")[1];
+		const backendBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
-		const response = await fetch(`${request.nextUrl.origin}/api/auth/refresh`, {
+		if (!backendBaseUrl) {
+			const failedUrl = request.nextUrl.clone();
+			failedUrl.pathname = loginUrl;
+			return NextResponse.redirect(failedUrl);
+		}
+
+		const response = await fetch(
+			`${normalizeBaseUrl(backendBaseUrl)}/auth/refresh`,
+			{
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				Cookie: `refresh_token=${
+					refreshToken ? encodeURIComponent(decodeURIComponent(refreshToken)) : ""
+				}`,
 			},
-			body: JSON.stringify({
-				refreshToken: refreshToken ? decodeURIComponent(refreshToken) : undefined,
-			}),
 		});
 
 		if (!response.ok) {

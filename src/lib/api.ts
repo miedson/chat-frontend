@@ -5,23 +5,9 @@ function normalizeBaseUrl(url: string) {
 }
 
 function resolveApiBaseUrl() {
-	const isServer = typeof window === "undefined";
-
-	if (isServer) {
-		// Server-side (route handlers/middleware): prefer backend internal URL.
-		const serverUrl =
-			process.env.API_CHAT_URL ??
-			process.env.NEXT_PUBLIC_API_BASE_URL ??
-			"http://localhost:3000";
-		return normalizeBaseUrl(serverUrl);
-	}
-
-	// Browser: must use public URL reachable by the user agent.
-	const clientUrl =
-		process.env.NEXT_PUBLIC_API_BASE_URL ??
-		process.env.API_CHAT_URL ??
-		"http://localhost:3000";
-	return normalizeBaseUrl(clientUrl);
+	return normalizeBaseUrl(
+		process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000",
+	);
 }
 
 export const api = axios.create({
