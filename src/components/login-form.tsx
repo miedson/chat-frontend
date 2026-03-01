@@ -2,7 +2,6 @@
 
 import { type FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
 import { authService } from "@/lib/services/auth.service";
 
 type LoginState = {
@@ -36,7 +35,7 @@ export function LoginForm() {
 					success: "Login bem-sucedido! Redirecionando...",
 				});
 				setTimeout(() => {
-					router.push("/conversations");
+					router.push("/board");
 				}, 1500);
 			})
 			.catch((error) => {

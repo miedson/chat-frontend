@@ -1,64 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { io } from "socket.io-client";
-import { api } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { io, type Socket } from "socket.io-client";
+import { AppMenu } from "@/components/app-menu";
+import { conversationService } from "@/lib/services/conversation.service";
+import { sessionService } from "@/lib/services/session.service";
+import {
+	type BoardResponse,
+	type Conversation,
+	type ConversationMessage,
+	type ConversationStatus,
+} from "@/lib/types/conversation.types";
 
-type ConversationStatus = "open" | "pending" | "resolved";
 type BoardColumnKey = "awaiting" | "inProgress" | "completed";
 
-type Conversation = {
-	id: string;
-	subject: string | null;
-	status: ConversationStatus;
-	channel: string | null;
-	externalContactName: string | null;
-	assignedTo: {
-		id: string;
-		name: string;
-		displayName: string | null;
-		email: string;
-	} | null;
-	participants: Array<{
-		id: string;
-		name: string;
-		displayName: string | null;
-		email: string;
-	}>;
-	lastMessage: {
-		id: string;
-		content: string;
-		type: "incoming" | "outgoing" | "internal";
-		createdAt: string;
-		sender: {
-			id: string;
-			name: string;
-			displayName: string | null;
-		} | null;
-	} | null;
-	createdAt: string;
-	updatedAt: string;
-};
-
-type Message = {
-	id: string;
-	conversationId: string;
-	content: string;
-	type: "incoming" | "outgoing" | "internal";
-	createdAt: string;
-	sender: {
-		id: string;
-		name: string;
-		displayName: string | null;
-	} | null;
-};
-
-type BoardResponse = {
-	awaiting: Conversation[];
-	inProgress: Conversation[];
-	completed: Conversation[];
+type ChatShellState = {
+	loadingBoard: boolean;
+	movingConversationId: string | null;
+	loggingOut: boolean;
+	error: string | null;
 };
 
 const SOCKET_URL =
@@ -85,8 +46,9 @@ function formatDateTime(value: string) {
 
 function conversationTitle(conversation: Conversation) {
 	if (conversation.subject?.trim()) return conversation.subject;
-	if (conversation.externalContactName?.trim())
+	if (conversation.externalContactName?.trim()) {
 		return conversation.externalContactName;
+	}
 	return "Conversa sem titulo";
 }
 
@@ -111,7 +73,7 @@ function hasConversation(board: BoardResponse, conversationId: string) {
 	);
 }
 
-function upsertMessageInBoard(board: BoardResponse, message: Message) {
+function upsertMessageInBoard(board: BoardResponse, message: ConversationMessage) {
 	const columns: BoardColumnKey[] = ["awaiting", "inProgress", "completed"];
 
 	for (const key of columns) {
@@ -174,12 +136,12 @@ function isConversation(payload: unknown): payload is Conversation {
 	);
 }
 
-function isMessage(payload: unknown): payload is Message {
+function isMessage(payload: unknown): payload is ConversationMessage {
 	return (
 		typeof payload === "object" &&
 		payload !== null &&
-		typeof (payload as Message).id === "string" &&
-		typeof (payload as Message).conversationId === "string"
+		typeof (payload as ConversationMessage).id === "string" &&
+		typeof (payload as ConversationMessage).conversationId === "string"
 	);
 }
 
@@ -190,12 +152,12 @@ export function ChatShell() {
 		inProgress: [],
 		completed: [],
 	});
-	const [loadingBoard, setLoadingBoard] = useState(true);
-	const [movingConversationId, setMovingConversationId] = useState<
-		string | null
-	>(null);
-	const [loggingOut, setLoggingOut] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	const [state, setState] = useState<ChatShellState>({
+		loadingBoard: true,
+		movingConversationId: null,
+		loggingOut: false,
+		error: null,
+	});
 	const [theme, setTheme] = useState<"light" | "dark">("dark");
 
 	const dragStateRef = useRef<{
@@ -233,27 +195,20 @@ export function ChatShell() {
 	}
 
 	async function syncBoard(silent = false) {
-		const response = await apiFetch("/api/conversations/board");
-		const payload = (await response.json().catch(() => null)) as
-			| BoardResponse
-			| { message?: string }
-			| null;
-
-		if (
-			!response.ok ||
-			!payload ||
-			!Array.isArray((payload as BoardResponse).awaiting) ||
-			!Array.isArray((payload as BoardResponse).inProgress) ||
-			!Array.isArray((payload as BoardResponse).completed)
-		) {
-			if (!silent) {
-				setError("Falha ao carregar o quadro de conversas.");
-			}
-			return;
-		}
-
-		setBoard(payload as BoardResponse);
-		setError(null);
+		return conversationService
+			.getBoard()
+			.then((data) => {
+				setBoard(data);
+				setState((current) => ({ ...current, error: null }));
+			})
+			.catch((error: Error) => {
+				if (!silent) {
+					setState((current) => ({
+						...current,
+						error: error.message || "Falha ao carregar o quadro de conversas.",
+					}));
+				}
+			});
 	}
 
 	async function moveConversation(
@@ -263,40 +218,34 @@ export function ChatShell() {
 		if (conversation.status === toStatus) return true;
 
 		if (!ALLOWED_TRANSITIONS[conversation.status].includes(toStatus)) {
-			setError("Transicao invalida para esta conversa.");
+			setState((current) => ({
+				...current,
+				error: "Transicao invalida para esta conversa.",
+			}));
 			return false;
 		}
 
-		setMovingConversationId(conversation.id);
+		setState((current) => ({ ...current, movingConversationId: conversation.id }));
 
-		const response = await apiFetch(
-			`/api/conversations/${conversation.id}/status`,
-			{
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ toStatus }),
-			},
-		);
-
-		const payload = (await response.json().catch(() => null)) as
-			| Conversation
-			| { message?: string }
-			| null;
-
-		if (!response.ok || !isConversation(payload)) {
-			setError(
-				!isConversation(payload) && payload?.message
-					? payload.message
-					: "Falha ao mover conversa.",
-			);
-			setMovingConversationId(null);
-			return false;
-		}
-
-		setBoard((current) => applyConversationUpdate(current, payload));
-		setMovingConversationId(null);
-		setError(null);
-		return true;
+		return conversationService
+			.updateStatus(conversation.id, toStatus)
+			.then((updated) => {
+				setBoard((current) => applyConversationUpdate(current, updated));
+				setState((current) => ({
+					...current,
+					movingConversationId: null,
+					error: null,
+				}));
+				return true;
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					movingConversationId: null,
+					error: error.message || "Falha ao mover conversa.",
+				}));
+				return false;
+			});
 	}
 
 	async function handleDrop(column: BoardColumnKey) {
@@ -318,7 +267,10 @@ export function ChatShell() {
 
 	function handleOpenConversation(conversation: Conversation) {
 		if (conversation.status === "open" || !conversation.assignedTo) {
-			setError("Assuma esta conversa antes de abrir o chat.");
+			setState((current) => ({
+				...current,
+				error: "Assuma esta conversa antes de abrir o chat.",
+			}));
 			return;
 		}
 
@@ -326,14 +278,13 @@ export function ChatShell() {
 	}
 
 	async function handleLogout() {
-		setLoggingOut(true);
-		await api.post("/api/auth/logout").catch(() => null);
-
+		setState((current) => ({ ...current, loggingOut: true }));
+		await sessionService.logout().catch(() => undefined);
 		window.location.assign("/login");
 	}
 
 	useEffect(() => {
-		const nextSocket = io(SOCKET_URL, {
+		const nextSocket: Socket = io(SOCKET_URL, {
 			withCredentials: true,
 			transports: ["websocket", "polling"],
 		});
@@ -392,12 +343,12 @@ export function ChatShell() {
 
 	useEffect(() => {
 		async function load() {
-			setLoadingBoard(true);
+			setState((current) => ({ ...current, loadingBoard: true }));
 			await syncBoard();
-			setLoadingBoard(false);
+			setState((current) => ({ ...current, loadingBoard: false }));
 		}
 
-		load();
+		void load();
 	}, []);
 
 	const columnMeta: Array<{
@@ -428,35 +379,39 @@ export function ChatShell() {
 
 	return (
 		<main className="board-layout">
-			<header className="board-header">
-				<div>
-					<span className="chat-kicker">BOARD DE CONVERSAS</span>
-					<h1>Kanban de Conversas</h1>
-					<p>Fluxo: Aguardando - Em andamento - Concluidas.</p>
-				</div>
+			<AppMenu
+				kicker="BOARD DE CONVERSAS"
+				title="Kanban de Conversas"
+				description="Fluxo: Aguardando - Em andamento - Concluidas."
+				items={[
+					{ href: "/board", label: "Board" },
+					{ href: "/settings/channels", label: "Canais" },
+				]}
+				actions={
+					<>
+						<button
+							type="button"
+							className="menu-action-button"
+							onClick={handleToggleTheme}
+							aria-label="Alternar tema"
+						>
+							{theme === "dark" ? "Tema claro" : "Tema escuro"}
+						</button>
+						<button
+							type="button"
+							className="menu-action-button"
+							onClick={() => {
+								void handleLogout();
+							}}
+							disabled={state.loggingOut}
+						>
+							{state.loggingOut ? "Saindo..." : "Sair"}
+						</button>
+					</>
+				}
+			/>
 
-				<div className="board-header-actions">
-					<button
-						type="button"
-						className="theme-toggle"
-						onClick={handleToggleTheme}
-						aria-label="Alternar tema"
-					>
-						{theme === "dark" ? "Tema claro" : "Tema escuro"}
-					</button>
-					<Link href="/settings/channels">Canais</Link>
-					<button
-						type="button"
-						className="settings-logout-button"
-						onClick={handleLogout}
-						disabled={loggingOut}
-					>
-						{loggingOut ? "Saindo..." : "Sair"}
-					</button>
-				</div>
-			</header>
-
-			{error ? <p className="chat-error">{error}</p> : null}
+			{state.error ? <p className="chat-error">{state.error}</p> : null}
 
 			<section className="board-content board-content-single">
 				<div className="kanban-grid">
@@ -479,11 +434,11 @@ export function ChatShell() {
 							<p>{column.description}</p>
 
 							<div className="kanban-cards">
-								{loadingBoard && column.cards.length === 0 ? (
+								{state.loadingBoard && column.cards.length === 0 ? (
 									<p className="chat-empty">Carregando conversas...</p>
 								) : null}
 
-								{!loadingBoard && column.cards.length === 0 ? (
+								{!state.loadingBoard && column.cards.length === 0 ? (
 									<p className="chat-empty">Sem conversas nesta coluna.</p>
 								) : null}
 
@@ -519,7 +474,7 @@ export function ChatShell() {
 											<span>
 												{conversation.assignedTo
 													? (conversation.assignedTo.displayName ??
-														conversation.assignedTo.name)
+															conversation.assignedTo.name)
 													: "Nao atribuida"}
 											</span>
 										</div>
@@ -528,13 +483,13 @@ export function ChatShell() {
 											<button
 												type="button"
 												className="kanban-assign-button"
-												disabled={movingConversationId === conversation.id}
+												disabled={state.movingConversationId === conversation.id}
 												onClick={(event) => {
 													event.stopPropagation();
 													void moveConversation(conversation, "pending");
 												}}
 											>
-												{movingConversationId === conversation.id
+												{state.movingConversationId === conversation.id
 													? "Assumindo..."
 													: "Assumir"}
 											</button>

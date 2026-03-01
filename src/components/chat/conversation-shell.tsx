@@ -1,47 +1,33 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { io, type Socket } from "socket.io-client";
-import { apiFetch } from "@/lib/api-client";
+import { AppMenu } from "@/components/app-menu";
+import { conversationService } from "@/lib/services/conversation.service";
+import { sessionService } from "@/lib/services/session.service";
+import {
+	type Conversation,
+	type ConversationMessage,
+	type ConversationStatus,
+} from "@/lib/types/conversation.types";
 
-type Conversation = {
-	id: string;
-	subject: string | null;
-	status: "open" | "pending" | "resolved";
-	channel: string | null;
-	externalContactName: string | null;
-	assignedTo: {
-		id: string;
-		name: string;
-		displayName: string | null;
-		email: string;
-	} | null;
-	updatedAt: string;
-};
-
-type Message = {
-	id: string;
-	conversationId: string;
-	content: string;
-	type: "incoming" | "outgoing" | "internal";
-	createdAt: string;
-	sender: {
-		id: string;
-		name: string;
-		displayName: string | null;
-	} | null;
+type ConversationShellState = {
+	loading: boolean;
+	sending: boolean;
+	changingStatus: boolean;
+	loggingOut: boolean;
+	error: string | null;
 };
 
 const SOCKET_URL =
 	process.env.NEXT_PUBLIC_CHAT_SOCKET_URL ?? "http://localhost:3000";
 
-function isMessage(payload: unknown): payload is Message {
+function isMessage(payload: unknown): payload is ConversationMessage {
 	return (
 		typeof payload === "object" &&
 		payload !== null &&
-		typeof (payload as Message).id === "string" &&
-		typeof (payload as Message).conversationId === "string"
+		typeof (payload as ConversationMessage).id === "string" &&
+		typeof (payload as ConversationMessage).conversationId === "string"
 	);
 }
 
@@ -54,7 +40,7 @@ function isConversation(payload: unknown): payload is Conversation {
 	);
 }
 
-function appendUnique(messages: Message[], incoming: Message) {
+function appendUnique(messages: ConversationMessage[], incoming: ConversationMessage) {
 	if (messages.some((item) => item.id === incoming.id)) {
 		return messages;
 	}
@@ -65,8 +51,9 @@ function appendUnique(messages: Message[], incoming: Message) {
 function titleFor(conversation: Conversation | null) {
 	if (!conversation) return "Conversa";
 	if (conversation.subject?.trim()) return conversation.subject;
-	if (conversation.externalContactName?.trim())
+	if (conversation.externalContactName?.trim()) {
 		return conversation.externalContactName;
+	}
 	return "Conversa sem titulo";
 }
 
@@ -89,14 +76,16 @@ export function ConversationShell({
 }: {
 	conversationId: string;
 }) {
-	const router = useRouter();
 	const [conversation, setConversation] = useState<Conversation | null>(null);
-	const [messages, setMessages] = useState<Message[]>([]);
+	const [messages, setMessages] = useState<ConversationMessage[]>([]);
 	const [messageInput, setMessageInput] = useState("");
-	const [loading, setLoading] = useState(true);
-	const [sending, setSending] = useState(false);
-	const [changingStatus, setChangingStatus] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	const [state, setState] = useState<ConversationShellState>({
+		loading: true,
+		sending: false,
+		changingStatus: false,
+		loggingOut: false,
+		error: null,
+	});
 	const conversationIdRef = useRef(conversationId);
 	const lastReadSyncRef = useRef(0);
 
@@ -106,50 +95,45 @@ export function ConversationShell({
 	);
 
 	async function loadConversation() {
-		const response = await apiFetch("/api/conversations");
-		const payload = (await response.json().catch(() => null)) as
-			| Conversation[]
-			| { message?: string }
-			| null;
+		return conversationService
+			.list()
+			.then((items) => {
+				const found = items.find((item) => item.id === conversationId);
 
-		if (!response.ok || !Array.isArray(payload)) {
-			setError("Falha ao carregar conversa.");
-			return false;
-		}
+				if (!found) {
+					throw new Error("Conversa nao encontrada ou nao atribuida para voce.");
+				}
 
-		const found = payload.find((item) => item.id === conversationId);
+				if (found.status === "open" || !found.assignedTo) {
+					throw new Error("Conversa nao esta atribuida para voce.");
+				}
 
-		if (!found) {
-			setError("Conversa nao encontrada ou nao atribuida para voce.");
-			return false;
-		}
-
-		if (found.status === "open" || !found.assignedTo) {
-			setError("Conversa nao esta atribuida para voce.");
-			return false;
-		}
-
-		setConversation(found);
-		return true;
+				setConversation(found);
+				return true;
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					error: error.message || "Falha ao carregar conversa.",
+				}));
+				return false;
+			});
 	}
 
 	async function loadMessages(silent = false) {
-		const response = await apiFetch(
-			`/api/conversations/${conversationId}/messages?limit=100`,
-		);
-		const payload = (await response.json().catch(() => null)) as
-			| Message[]
-			| { message?: string }
-			| null;
-
-		if (!response.ok || !Array.isArray(payload)) {
-			if (!silent) {
-				setError("Falha ao carregar mensagens.");
-			}
-			return;
-		}
-
-		setMessages(payload);
+		return conversationService
+			.getMessages(conversationId, 100)
+			.then((payload) => {
+				setMessages(payload);
+			})
+			.catch((error: Error) => {
+				if (!silent) {
+					setState((current) => ({
+						...current,
+						error: error.message || "Falha ao carregar mensagens.",
+					}));
+				}
+			});
 	}
 
 	async function syncReadReceipt(force = false) {
@@ -159,9 +143,7 @@ export function ConversationShell({
 		}
 
 		lastReadSyncRef.current = now;
-		await apiFetch(`/api/conversations/${conversationId}/read`, {
-			method: "POST",
-		}).catch(() => null);
+		await conversationService.syncRead(conversationId).catch(() => undefined);
 	}
 
 	async function handleSend(event: FormEvent<HTMLFormElement>) {
@@ -171,74 +153,54 @@ export function ConversationShell({
 			return;
 		}
 
-		setSending(true);
+		setState((current) => ({ ...current, sending: true }));
 
-		const response = await apiFetch(
-			`/api/conversations/${conversationId}/messages`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					content: messageInput.trim(),
-					type: "outgoing",
-				}),
-			},
-		);
-
-		const payload = (await response.json().catch(() => null)) as
-			| Message
-			| { message?: string }
-			| null;
-
-		if (!response.ok || !isMessage(payload)) {
-			setError(
-				!isMessage(payload) && payload?.message
-					? payload.message
-					: "Falha ao enviar mensagem.",
-			);
-			setSending(false);
-			return;
-		}
-
-		setMessages((current) => appendUnique(current, payload));
-		setMessageInput("");
-		setSending(false);
+		return conversationService
+			.sendMessage(conversationId, messageInput.trim())
+			.then((payload) => {
+				setMessages((current) => appendUnique(current, payload));
+				setMessageInput("");
+				setState((current) => ({ ...current, sending: false, error: null }));
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					sending: false,
+					error: error.message || "Falha ao enviar mensagem.",
+				}));
+			});
 	}
 
-	async function handleStatusChange(nextStatus: "pending" | "resolved") {
+	async function handleStatusChange(nextStatus: Exclude<ConversationStatus, "open">) {
 		if (!conversation || conversation.status === nextStatus) {
 			return;
 		}
 
-		setChangingStatus(true);
+		setState((current) => ({ ...current, changingStatus: true }));
 
-		const response = await apiFetch(
-			`/api/conversations/${conversation.id}/status`,
-			{
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ toStatus: nextStatus }),
-			},
-		);
+		return conversationService
+			.updateStatus(conversation.id, nextStatus)
+			.then((updated) => {
+				setConversation(updated);
+				setState((current) => ({
+					...current,
+					changingStatus: false,
+					error: null,
+				}));
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					changingStatus: false,
+					error: error.message || "Falha ao atualizar status.",
+				}));
+			});
+	}
 
-		const payload = (await response.json().catch(() => null)) as
-			| Conversation
-			| { message?: string }
-			| null;
-
-		if (!response.ok || !isConversation(payload)) {
-			setError(
-				!isConversation(payload) && payload?.message
-					? payload.message
-					: "Falha ao atualizar status da conversa.",
-			);
-			setChangingStatus(false);
-			return;
-		}
-
-		setConversation(payload);
-		setChangingStatus(false);
-		setError(null);
+	async function handleLogout() {
+		setState((current) => ({ ...current, loggingOut: true }));
+		await sessionService.logout().catch(() => undefined);
+		window.location.assign("/login");
 	}
 
 	useEffect(() => {
@@ -247,8 +209,11 @@ export function ConversationShell({
 
 	useEffect(() => {
 		async function bootstrap() {
-			setLoading(true);
-			setError(null);
+			setState((current) => ({
+				...current,
+				loading: true,
+				error: null,
+			}));
 
 			const ok = await loadConversation();
 			if (ok) {
@@ -256,10 +221,10 @@ export function ConversationShell({
 				await syncReadReceipt(true);
 			}
 
-			setLoading(false);
+			setState((current) => ({ ...current, loading: false }));
 		}
 
-		bootstrap();
+		void bootstrap();
 	}, [conversationId]);
 
 	useEffect(() => {
@@ -324,57 +289,60 @@ export function ConversationShell({
 
 	return (
 		<main className="conversation-layout">
-			<header className="conversation-header">
-				<div>
-					<span className="chat-kicker">CONVERSA</span>
-					<h1>{titleFor(conversation)}</h1>
-					{conversation ? (
-						<p className="chat-empty">{channelLabel(conversation.channel)}</p>
-					) : null}
-				</div>
-				<div className="conversation-header-actions">
-					{conversation?.status === "pending" ? (
+			<AppMenu
+				kicker="CONVERSA"
+				title={titleFor(conversation)}
+				description={conversation ? channelLabel(conversation.channel) : ""}
+				items={[
+					{ href: "/board", label: "Board" },
+					{ href: "/settings/channels", label: "Canais" },
+				]}
+				actions={
+					<>
+						{conversation?.status === "pending" ? (
+							<button
+								type="button"
+								className="menu-action-button"
+								onClick={() => {
+									void handleStatusChange("resolved");
+								}}
+								disabled={state.changingStatus}
+							>
+								{state.changingStatus ? "Atualizando..." : "Concluir"}
+							</button>
+						) : null}
+
+						{conversation?.status === "resolved" ? (
+							<button
+								type="button"
+								className="menu-action-button"
+								onClick={() => {
+									void handleStatusChange("pending");
+								}}
+								disabled={state.changingStatus}
+							>
+								{state.changingStatus ? "Atualizando..." : "Reabrir"}
+							</button>
+						) : null}
+
 						<button
 							type="button"
-							className="theme-toggle"
+							className="menu-action-button"
 							onClick={() => {
-								void handleStatusChange("resolved");
+								void handleLogout();
 							}}
-							disabled={changingStatus}
+							disabled={state.loggingOut}
 						>
-							{changingStatus ? "Atualizando..." : "Concluir"}
+							{state.loggingOut ? "Saindo..." : "Sair"}
 						</button>
-					) : null}
+					</>
+				}
+			/>
 
-					{conversation?.status === "resolved" ? (
-						<button
-							type="button"
-							className="theme-toggle"
-							onClick={() => {
-								void handleStatusChange("pending");
-							}}
-							disabled={changingStatus}
-						>
-							{changingStatus ? "Atualizando..." : "Reabrir conversa"}
-						</button>
-					) : null}
-
-					<button
-						type="button"
-						className="theme-toggle"
-						onClick={() => {
-							router.push("/board");
-						}}
-					>
-						Voltar ao quadro
-					</button>
-				</div>
-			</header>
-
-			{error ? <p className="chat-error">{error}</p> : null}
+			{state.error ? <p className="chat-error">{state.error}</p> : null}
 
 			<section className="conversation-thread">
-				{loading ? (
+				{state.loading ? (
 					<p className="chat-empty">Carregando conversa...</p>
 				) : messages.length === 0 ? (
 					<p className="chat-empty">Nenhuma mensagem nesta conversa.</p>
@@ -388,18 +356,15 @@ export function ConversationShell({
 				)}
 			</section>
 
-			<form
-				className="chat-composer conversation-composer"
-				onSubmit={handleSend}
-			>
+			<form className="chat-composer conversation-composer" onSubmit={handleSend}>
 				<input
 					value={messageInput}
 					onChange={(event) => setMessageInput(event.target.value)}
 					placeholder="Digite sua resposta"
-					disabled={!canReply || sending || loading}
+					disabled={!canReply || state.sending || state.loading}
 				/>
-				<button type="submit" disabled={!canReply || sending || loading}>
-					{sending ? "Enviando..." : "Enviar"}
+				<button type="submit" disabled={!canReply || state.sending || state.loading}>
+					{state.sending ? "Enviando..." : "Enviar"}
 				</button>
 			</form>
 		</main>

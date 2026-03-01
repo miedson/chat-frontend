@@ -1,22 +1,21 @@
 "use client";
 
-import { api } from "@/lib/api";
-import { apiFetch } from "@/lib/api-client";
-import Link from "next/link";
 import { type FormEvent, useEffect, useState } from "react";
-import { io } from "socket.io-client";
+import { io, type Socket } from "socket.io-client";
+import { AppMenu } from "@/components/app-menu";
+import { channelService } from "@/lib/services/channel.service";
+import { sessionService } from "@/lib/services/session.service";
+import {
+	type ChannelConnection,
+	type ConnectWhatsappPayload,
+} from "@/lib/types/channel.types";
 
-type ChannelConnection = {
-	id: string;
-	kind: "whatsapp" | "instagram";
-	provider: "evolution" | "whatsapp_cloud" | "instagram_graph";
-	name: string;
-	phone: string;
-	status: "pending_qr" | "connected" | "disconnected" | "failed";
-	providerInstanceKey: string | null;
-	qrCodeBase64: string | null;
-	createdAt: string;
-	updatedAt: string;
+type ChannelSettingsState = {
+	loading: boolean;
+	loadingInstagramOAuth: boolean;
+	syncingId: string | null;
+	loggingOut: boolean;
+	error: string | null;
 };
 
 const SOCKET_URL =
@@ -42,40 +41,44 @@ function upsertChannelConnection(
 	);
 }
 
+function isWhatsappProvider(
+	value: string,
+): value is ConnectWhatsappPayload["provider"] {
+	return value === "evolution" || value === "whatsapp_cloud";
+}
+
 export function ChannelSettings() {
 	const [channels, setChannels] = useState<ChannelConnection[]>([]);
-	const [provider, setProvider] = useState<"evolution" | "whatsapp_cloud">(
+	const [provider, setProvider] = useState<ConnectWhatsappPayload["provider"]>(
 		"evolution",
 	);
 	const [name, setName] = useState("");
 	const [phone, setPhone] = useState("");
 	const [useOrganizationPhone, setUseOrganizationPhone] = useState(true);
-	const [loading, setLoading] = useState(false);
-	const [loadingInstagramOAuth, setLoadingInstagramOAuth] = useState(false);
-	const [syncingId, setSyncingId] = useState<string | null>(null);
-	const [loggingOut, setLoggingOut] = useState(false);
-	const [error, setError] = useState<string | null>(null);
+	const [state, setState] = useState<ChannelSettingsState>({
+		loading: false,
+		loadingInstagramOAuth: false,
+		syncingId: null,
+		loggingOut: false,
+		error: null,
+	});
 
 	async function loadChannels() {
-		const response = await apiFetch("/api/channels");
-		const payload = (await response.json().catch(() => [])) as
-			| ChannelConnection[]
-			| { message?: string };
-
-		if (!response.ok || !Array.isArray(payload)) {
-			setError(
-				Array.isArray(payload)
-					? "Falha ao carregar canais."
-					: (payload.message ?? "Falha ao carregar canais."),
-			);
-			return;
-		}
-
-		setChannels(payload);
+		return channelService
+			.list()
+			.then((payload) => {
+				setChannels(payload);
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					error: error.message || "Falha ao carregar canais.",
+				}));
+			});
 	}
 
 	useEffect(() => {
-		loadChannels();
+		void loadChannels();
 	}, []);
 
 	useEffect(() => {
@@ -84,7 +87,7 @@ export function ChannelSettings() {
 		}
 
 		const intervalId = setInterval(() => {
-			loadChannels();
+			void loadChannels();
 		}, 5000);
 
 		return () => {
@@ -93,7 +96,7 @@ export function ChannelSettings() {
 	}, [channels]);
 
 	useEffect(() => {
-		const nextSocket = io(SOCKET_URL, {
+		const nextSocket: Socket = io(SOCKET_URL, {
 			withCredentials: true,
 			transports: ["websocket", "polling"],
 		});
@@ -112,118 +115,103 @@ export function ChannelSettings() {
 
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		setError(null);
-		setLoading(true);
+		setState((current) => ({ ...current, error: null, loading: true }));
 
-		const response = await apiFetch("/api/channels/whatsapp/connect", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
+		return channelService
+			.connectWhatsapp({
 				provider,
 				name: name.trim() || undefined,
 				phone: phone.trim() || undefined,
 				useOrganizationPhone,
-			}),
-		});
-
-		const payload = (await response.json().catch(() => null)) as {
-			connection?: ChannelConnection;
-			message?: string;
-		} | null;
-
-		if (!response.ok || !payload?.connection) {
-			setError(payload?.message ?? "Falha ao conectar canal.");
-			setLoading(false);
-			return;
-		}
-
-		setName("");
-		setPhone("");
-		setUseOrganizationPhone(true);
-		setChannels((current) =>
-			upsertChannelConnection(current, payload.connection as ChannelConnection),
-		);
-		setLoading(false);
+			})
+			.then((connection) => {
+				setName("");
+				setPhone("");
+				setUseOrganizationPhone(true);
+				setChannels((current) => upsertChannelConnection(current, connection));
+				setState((current) => ({ ...current, loading: false }));
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					loading: false,
+					error: error.message || "Falha ao conectar canal.",
+				}));
+			});
 	}
 
 	async function handleStartInstagramOAuth() {
-		setError(null);
-		setLoadingInstagramOAuth(true);
+		setState((current) => ({
+			...current,
+			error: null,
+			loadingInstagramOAuth: true,
+		}));
 
-		const response = await apiFetch("/api/channels/instagram/oauth/url");
-
-		const payload = (await response.json().catch(() => null)) as {
-			authUrl?: string;
-			message?: string;
-		} | null;
-
-		if (!response.ok || !payload?.authUrl) {
-			setError(
-				payload?.message ?? "Falha ao iniciar conexão OAuth do Instagram.",
-			);
-			setLoadingInstagramOAuth(false);
-			return;
-		}
-
-		window.location.assign(payload.authUrl);
+		return channelService
+			.getInstagramOAuthUrl()
+			.then((authUrl) => {
+				window.location.assign(authUrl);
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					loadingInstagramOAuth: false,
+					error: error.message || "Falha ao iniciar conexão OAuth.",
+				}));
+			});
 	}
 
 	async function handleSyncWebhook(connectionId: string) {
-		setSyncingId(connectionId);
-		setError(null);
+		setState((current) => ({
+			...current,
+			error: null,
+			syncingId: connectionId,
+		}));
 
-		const response = await apiFetch(
-			`/api/channels/${connectionId}/webhook/sync`,
-			{ method: "POST" },
-		);
-
-		const payload = (await response.json().catch(() => null)) as {
-			connection?: ChannelConnection;
-			message?: string;
-		} | null;
-
-		if (!response.ok || !payload?.connection) {
-			setError(payload?.message ?? "Falha ao sincronizar webhook.");
-			setSyncingId(null);
-			return;
-		}
-
-		setChannels((current) =>
-			upsertChannelConnection(current, payload.connection as ChannelConnection),
-		);
-		setSyncingId(null);
+		return channelService
+			.syncWebhook(connectionId)
+			.then((connection) => {
+				setChannels((current) => upsertChannelConnection(current, connection));
+				setState((current) => ({ ...current, syncingId: null }));
+			})
+			.catch((error: Error) => {
+				setState((current) => ({
+					...current,
+					syncingId: null,
+					error: error.message || "Falha ao sincronizar webhook.",
+				}));
+			});
 	}
 
 	async function handleLogout() {
-		setLoggingOut(true);
-		await api.post("/api/auth/logout").catch(() => null);
-
+		setState((current) => ({ ...current, loggingOut: true }));
+		await sessionService.logout().catch(() => undefined);
 		window.location.assign("/login");
 	}
 
 	return (
 		<main className="settings-layout">
-			<header className="settings-header">
-				<div>
-					<span className="chat-kicker">CONFIGURACOES</span>
-					<h1>Canais do board</h1>
-					<p>
-						Conecte WhatsApp e Instagram. No Instagram, o sistema separa
-						conversas de Direct e comentarios em cards distintos.
-					</p>
-				</div>
-				<div className="settings-header-actions">
-					<Link href="/board">Voltar ao board</Link>
+			<AppMenu
+				kicker="CONFIGURACOES"
+				title="Canais do board"
+				description="Conecte WhatsApp e Instagram e mantenha os canais sincronizados."
+				items={[
+					{ href: "/board", label: "Board" },
+					{ href: "/settings/channels", label: "Canais" },
+				]}
+				actions={
 					<button
 						type="button"
-						className="settings-logout-button"
-						onClick={handleLogout}
-						disabled={loggingOut}
+						className="menu-action-button"
+						onClick={() => {
+							void handleLogout();
+						}}
+						disabled={state.loggingOut}
 					>
-						{loggingOut ? "Saindo..." : "Sair"}
+						{state.loggingOut ? "Saindo..." : "Sair"}
 					</button>
-				</div>
-			</header>
+				}
+			/>
 
 			<section className="settings-grid">
 				<article className="settings-card">
@@ -233,11 +221,12 @@ export function ChannelSettings() {
 						<select
 							id="provider"
 							value={provider}
-							onChange={(event) =>
-								setProvider(
-									event.target.value as "evolution" | "whatsapp_cloud",
-								)
-							}
+							onChange={(event) => {
+								if (!isWhatsappProvider(event.target.value)) {
+									return;
+								}
+								setProvider(event.target.value);
+							}}
 						>
 							<option value="evolution">Evolution API</option>
 							<option value="whatsapp_cloud">WhatsApp Cloud API</option>
@@ -271,12 +260,12 @@ export function ChannelSettings() {
 							Usar telefone da organizacao
 						</label>
 
-						<button type="submit" disabled={loading}>
-							{loading ? "Conectando..." : "Conectar canal"}
+						<button type="submit" disabled={state.loading}>
+							{state.loading ? "Conectando..." : "Conectar canal"}
 						</button>
 					</form>
 
-					{error ? <p className="chat-error">{error}</p> : null}
+					{state.error ? <p className="chat-error">{state.error}</p> : null}
 				</article>
 
 				<article className="settings-card">
@@ -291,9 +280,9 @@ export function ChannelSettings() {
 						onClick={() => {
 							void handleStartInstagramOAuth();
 						}}
-						disabled={loadingInstagramOAuth}
+						disabled={state.loadingInstagramOAuth}
 					>
-						{loadingInstagramOAuth
+						{state.loadingInstagramOAuth
 							? "Redirecionando para Meta..."
 							: "Conectar com Instagram (Meta)"}
 					</button>
@@ -334,10 +323,12 @@ export function ChannelSettings() {
 									<button
 										type="button"
 										className="settings-sync-button"
-										onClick={() => handleSyncWebhook(channel.id)}
-										disabled={syncingId === channel.id}
+										onClick={() => {
+											void handleSyncWebhook(channel.id);
+										}}
+										disabled={state.syncingId === channel.id}
 									>
-										{syncingId === channel.id
+										{state.syncingId === channel.id
 											? "Sincronizando..."
 											: "Sincronizar webhook"}
 									</button>
