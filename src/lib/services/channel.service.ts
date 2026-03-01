@@ -28,7 +28,7 @@ function resolveErrorMessage(error: unknown, fallback: string) {
 export const channelService = {
 	async list(): Promise<ChannelConnection[]> {
 		return api
-			.get<ChannelConnection[]>("/channels")
+			.get<ChannelConnection[]>("/channel")
 			.then((response) => response.data)
 			.catch((error: unknown) => {
 				throw new Error(resolveErrorMessage(error, "Falha ao carregar canais."));
@@ -37,7 +37,7 @@ export const channelService = {
 
 	async connectWhatsapp(payload: ConnectWhatsappPayload): Promise<ChannelConnection> {
 		return api
-			.post<ConnectionResponse>("/channels/whatsapp/connect", payload)
+			.post<ConnectionResponse>("/channel/whatsapp/connect", payload)
 			.then((response) => response.data.connection)
 			.catch((error: unknown) => {
 				throw new Error(resolveErrorMessage(error, "Falha ao conectar canal."));
@@ -46,7 +46,7 @@ export const channelService = {
 
 	async getInstagramOAuthUrl(): Promise<string> {
 		return api
-			.get<InstagramOAuthResponse>("/channels/instagram/oauth/url")
+			.get<InstagramOAuthResponse>("/channel/instagram/oauth/url")
 			.then((response) => response.data.authUrl)
 			.catch((error: unknown) => {
 				throw new Error(resolveErrorMessage(error, "Falha ao iniciar OAuth."));
@@ -55,7 +55,7 @@ export const channelService = {
 
 	async syncWebhook(connectionId: string): Promise<ChannelConnection> {
 		return api
-			.post<ConnectionResponse>(`/channels/${connectionId}/webhook/sync`)
+			.post<ConnectionResponse>(`/channel/${connectionId}/webhook/sync`)
 			.then((response) => response.data.connection)
 			.catch((error: unknown) => {
 				throw new Error(resolveErrorMessage(error, "Falha ao sincronizar webhook."));
@@ -64,7 +64,7 @@ export const channelService = {
 
 	async exchangeInstagramCode(code: string, state: string): Promise<void> {
 		return api
-			.get("/channels/instagram/oauth/exchange", {
+			.get("/channel/instagram/oauth/exchange", {
 				params: { code, state },
 			})
 			.then(() => undefined)
