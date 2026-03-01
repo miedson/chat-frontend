@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { AppMenu } from "@/components/app-menu";
 import { channelService } from "@/lib/services/channel.service";
 
@@ -13,7 +13,6 @@ type CallbackState = {
 
 export default function InstagramCallbackPage() {
 	const router = useRouter();
-	const searchParams = useSearchParams();
 	const [state, setState] = useState<CallbackState>({
 		message: "Finalizando conexão com Instagram...",
 		error: null,
@@ -22,8 +21,9 @@ export default function InstagramCallbackPage() {
 
 	useEffect(() => {
 		async function run() {
-			const code = searchParams.get("code");
-			const oauthState = searchParams.get("state");
+			const params = new URLSearchParams(window.location.search);
+			const code = params.get("code");
+			const oauthState = params.get("state");
 
 			if (!code || !oauthState) {
 				setState({
@@ -57,7 +57,7 @@ export default function InstagramCallbackPage() {
 		}
 
 		void run();
-	}, [router, searchParams]);
+	}, [router]);
 
 	return (
 		<main className="settings-layout">
