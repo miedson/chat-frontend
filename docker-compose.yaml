@@ -12,6 +12,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       API_CHAT_URL: ${API_CHAT_URL}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
       NEXT_PUBLIC_CHAT_SOCKET_URL: ${NEXT_PUBLIC_CHAT_SOCKET_URL}
     ports:
       - '3002:3000'

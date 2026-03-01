@@ -15,7 +15,8 @@ cp .env.example .env.local
 
 Edite o arquivo e ajuste:
 
-- `API_CHAT_URL`: URL do backend `api-chat` para rotas REST
+- `API_CHAT_URL`: URL do backend `api-chat` usada no server-side (ex.: `http://api-chat:3000` em rede interna do Coolify)
+- `NEXT_PUBLIC_API_BASE_URL`: URL pública da `api-chat` usada no browser (ex.: `https://api-chat.seudominio.com`)
 - `NEXT_PUBLIC_CHAT_SOCKET_URL`: URL do Socket.IO do backend
 
 ## Executar
@@ -47,7 +48,8 @@ Este projeto está preparado para deploy via `docker-compose.yaml`.
 
 Defina no Coolify:
 
-- `API_CHAT_URL`: URL pública da `api-chat` (ex.: `https://api-chat.seudominio.com`)
+- `API_CHAT_URL`: URL interna da `api-chat` acessível pelo container do frontend (ex.: `http://api-chat:3000`)
+- `NEXT_PUBLIC_API_BASE_URL`: URL pública da `api-chat` (ex.: `https://api-chat.seudominio.com`)
 - `NEXT_PUBLIC_CHAT_SOCKET_URL`: URL pública do Socket.IO da `api-chat` (normalmente a mesma URL)
 - `PORT`: `3000` (opcional, padrão já definido no container)
 
