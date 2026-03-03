@@ -168,6 +168,16 @@ body {
 	box-shadow: 0 0 0 3px rgba(82, 167, 255, 0.23);
 }
 
+.login-form input.input-error {
+	border-color: color-mix(in srgb, var(--danger) 68%, #ffffff);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 26%, transparent);
+}
+
+.login-form input.input-success {
+	border-color: color-mix(in srgb, var(--success) 64%, #ffffff);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+}
+
 .login-form button {
 	margin-top: 0.35rem;
 	border: none;
@@ -204,6 +214,23 @@ body {
 
 .login-message.success {
 	color: var(--success);
+}
+
+.auth-link {
+	margin: 1rem 0 0;
+	font-size: 0.9rem;
+	color: var(--muted);
+}
+
+.auth-link a {
+	color: var(--text);
+	font-weight: 700;
+	text-decoration: none;
+	border-bottom: 1px solid color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.auth-link a:hover {
+	opacity: 0.9;
 }
 
 @media (max-width: 900px) {

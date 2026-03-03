@@ -1,8 +1,10 @@
 "use client";
 
 import { type FormEvent, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authService } from "@/lib/services/auth.service";
+import { setPendingVerification } from "@/lib/verification-pending";
 
 type LoginState = {
 	loading: boolean;
@@ -38,7 +40,14 @@ export function LoginForm() {
 					router.push("/board");
 				}, 1500);
 			})
-			.catch((error) => {
+			.catch((error: Error) => {
+				if (error.message?.includes("Email not verified")) {
+					window.sessionStorage.setItem("pending_verification", JSON.stringify({ email, password }));
+					setPendingVerification(email);
+					router.push(`/verificar-email?email=${encodeURIComponent(email)}`);
+					return;
+				}
+
 				setState({
 					loading: false,
 					error: error.message || "Falha no login. Tente novamente.",
@@ -86,6 +95,13 @@ export function LoginForm() {
 					<p className="login-message success">{state.success}</p>
 				) : null}
 			</form>
+
+			<p className="auth-link">
+				Nao possui conta? <Link href="/register">Criar conta</Link>
+			</p>
+			<p className="auth-link">
+				Esqueceu sua senha? <Link href="/redefinir-senha">Redefinir senha</Link>
+			</p>
 		</section>
 	);
 }
